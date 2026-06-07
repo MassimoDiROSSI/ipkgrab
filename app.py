@@ -15,17 +15,16 @@ HTML_PAGE = '''
     <title>IPKO Image Fetch</title>
     <style>
         body { font-family: Arial, sans-serif; padding: 40px; background: #f5f5f5; }
-        .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .container { max-width: 500px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
         input { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
         button { width: 100%; padding: 12px; background: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
         button:hover { background: #b71c1c; }
         button:disabled { background: #ccc; cursor: not-allowed; }
         #result { margin-top: 20px; text-align: center; }
         #result img { max-width: 100%; border: 1px solid #ddd; border-radius: 4px; }
-        .error { color: #d32f2f; margin-top: 10px; white-space: pre-wrap; text-align: left; font-size: 12px; }
+        .error { color: #d32f2f; margin-top: 10px; }
         .loading { color: #666; }
         .info { font-size: 12px; color: #666; margin-top: 10px; word-break: break-all; }
-        .debug { background: #f0f0f0; padding: 10px; border-radius: 4px; margin-top: 10px; text-align: left; font-size: 11px; font-family: monospace; max-height: 300px; overflow: auto; }
     </style>
 </head>
 <body>
@@ -60,13 +59,8 @@ HTML_PAGE = '''
                         <img src="${data.image}" alt="Safety Image">
                         <p class="info">Tracking: ${data.tracking || 'N/A'}</p>
                     `;
-                } else if (data.raw) {
-                    result.innerHTML = `
-                        <p class="error">No image in response. Raw response:</p>
-                        <div class="debug">${JSON.stringify(data.raw, null, 2)}</div>
-                    `;
                 } else {
-                    result.innerHTML = `<p class="error">Error: ${data.error || 'Unknown'}</p>`;
+                    result.innerHTML = `<p class="error">Error: ${data.error || 'Unknown'}</p><pre style="font-size:10px;text-align:left;">${JSON.stringify(data, null, 2)}</pre>`;
                 }
             } catch (err) {
                 result.innerHTML = `<p class="error">Failed: ${err.message}</p>`;
@@ -110,51 +104,34 @@ def fetch():
         "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
         "Origin": "https://www.ipko.pl",
         "Referer": "https://www.ipko.pl/ipko3/login",
-        "Sec-Ch-Ua": '"Google Chrome";v="125", "Chromium";v="125"',
-        "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": '"Windows"',
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-origin",
-        "X-Requested-With": "XMLHttpRequest",
     }
     
     try:
         s = requests.Session()
-        
-        # First GET
-        get_resp = s.get(
-            "https://www.ipko.pl/ipko3/login",
-            headers={**headers, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"},
-            timeout=15,
-            allow_redirects=True
-        )
-        
+        s.get("https://www.ipko.pl/ipko3/login", headers=headers, timeout=15, allow_redirects=True)
         time.sleep(0.5)
         
-        # POST
-        post_resp = s.post(
-            "https://www.ipko.pl/ipko3/login",
-            json=payload,
-            headers=headers,
-            timeout=15
-        )
+        r = s.post("https://www.ipko.pl/ipko3/login", json=payload, headers=headers, timeout=15)
+        resp = r.json()
         
-        resp = post_resp.json()
+        # FIX: Handle the nested response structure
+        # Your data has: {"response": {"data": {"image": {"src": "..."}}}}
+        response_wrapper = resp.get("response", {})
+        inner_data = response_wrapper.get("data", {})
         
-        # Debug: log the full response structure
-        print("FULL RESPONSE:", resp)
-        
-        img = resp.get("data", {}).get("image", {}).get("src", "")
-        track = resp.get("data", {}).get("tracking_pixel", "")
+        img = inner_data.get("image", {}).get("src", "")
+        track = inner_data.get("tracking_pixel", "")
         
         if not img:
-            # Return raw response for debugging
+            # Fallback: try direct access
+            img = resp.get("data", {}).get("image", {}).get("src", "")
+            track = resp.get("data", {}).get("tracking_pixel", "")
+        
+        if not img:
             return jsonify({
                 "success": False,
-                "raw": resp,
-                "status_code": post_resp.status_code,
-                "error": "No image in response"
+                "error": "No image found",
+                "keys": list(resp.keys())
             })
         
         return jsonify({

@@ -22,9 +22,10 @@ HTML_PAGE = '''
         button:disabled { background: #ccc; cursor: not-allowed; }
         #result { margin-top: 20px; text-align: center; }
         #result img { max-width: 100%; border: 1px solid #ddd; border-radius: 4px; }
-        .error { color: #d32f2f; margin-top: 10px; }
+        .error { color: #d32f2f; margin-top: 10px; white-space: pre-wrap; text-align: left; font-size: 12px; }
         .loading { color: #666; }
         .info { font-size: 12px; color: #666; margin-top: 10px; word-break: break-all; }
+        .debug { background: #f0f0f0; padding: 10px; border-radius: 4px; margin-top: 10px; text-align: left; font-size: 10px; font-family: monospace; max-height: 300px; overflow: auto; }
     </style>
 </head>
 <body>
@@ -60,7 +61,11 @@ HTML_PAGE = '''
                         <p class="info">Tracking: ${data.tracking || 'N/A'}</p>
                     `;
                 } else {
-                    result.innerHTML = `<p class="error">Error: ${data.error || 'Unknown'}</p><pre style="font-size:10px;text-align:left;">${JSON.stringify(data, null, 2)}</pre>`;
+                    let html = `<p class="error">Error: ${data.error || 'Unknown'}</p>`;
+                    if (data.debug) {
+                        html += `<div class="debug">${JSON.stringify(data.debug, null, 2)}</div>`;
+                    }
+                    result.innerHTML = html;
                 }
             } catch (err) {
                 result.innerHTML = `<p class="error">Failed: ${err.message}</p>`;
@@ -114,24 +119,43 @@ def fetch():
         r = s.post("https://www.ipko.pl/ipko3/login", json=payload, headers=headers, timeout=15)
         resp = r.json()
         
-        # FIX: Handle the nested response structure
-        # Your data has: {"response": {"data": {"image": {"src": "..."}}}}
+        # Extract image - handle all possible structures
         response_wrapper = resp.get("response", {})
-        inner_data = response_wrapper.get("data", {})
+        inner_data = response_wrapper.get("data", {}) if isinstance(response_wrapper, dict) else {}
         
-        img = inner_data.get("image", {}).get("src", "")
+        # Handle image as either dict or string
+        image_obj = inner_data.get("image", {})
+        if isinstance(image_obj, str):
+            img = image_obj
+        elif isinstance(image_obj, dict):
+            img = image_obj.get("src", "")
+        else:
+            img = ""
+        
         track = inner_data.get("tracking_pixel", "")
         
+        # Also try direct access as fallback
         if not img:
-            # Fallback: try direct access
-            img = resp.get("data", {}).get("image", {}).get("src", "")
-            track = resp.get("data", {}).get("tracking_pixel", "")
+            direct_data = resp.get("data", {})
+            direct_img = direct_data.get("image", {})
+            if isinstance(direct_img, str):
+                img = direct_img
+            elif isinstance(direct_img, dict):
+                img = direct_img.get("src", "")
+            track = direct_data.get("tracking_pixel", track)
         
         if not img:
             return jsonify({
                 "success": False,
-                "error": "No image found",
-                "keys": list(resp.keys())
+                "error": "No image found in response",
+                "debug": {
+                    "resp_keys": list(resp.keys()),
+                    "has_response": "response" in resp,
+                    "response_type": type(response_wrapper).__name__,
+                    "data_keys": list(inner_data.keys()) if inner_data else [],
+                    "image_type": type(image_obj).__name__,
+                    "image_value": str(image_obj)[:200] if image_obj else "None"
+                }
             })
         
         return jsonify({

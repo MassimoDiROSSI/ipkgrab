@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, render_template_string, request, jsonify, make_response
 import requests
 import hashlib
 import random
@@ -6,6 +6,14 @@ import time
 import os
 
 app = Flask(__name__)
+
+# Manual CORS headers for all responses
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
 
 HTML_PAGE = '''
 <!DOCTYPE html>
@@ -22,10 +30,9 @@ HTML_PAGE = '''
         button:disabled { background: #ccc; cursor: not-allowed; }
         #result { margin-top: 20px; text-align: center; }
         #result img { max-width: 100%; border: 1px solid #ddd; border-radius: 4px; }
-        .error { color: #d32f2f; margin-top: 10px; white-space: pre-wrap; text-align: left; font-size: 12px; }
+        .error { color: #d32f2f; margin-top: 10px; }
         .loading { color: #666; }
         .info { font-size: 12px; color: #666; margin-top: 10px; word-break: break-all; }
-        .debug { background: #f0f0f0; padding: 10px; border-radius: 4px; margin-top: 10px; text-align: left; font-size: 10px; font-family: monospace; max-height: 300px; overflow: auto; }
     </style>
 </head>
 <body>
@@ -61,11 +68,7 @@ HTML_PAGE = '''
                         <p class="info">Tracking: ${data.tracking || 'N/A'}</p>
                     `;
                 } else {
-                    let html = `<p class="error">Error: ${data.error || 'Unknown'}</p>`;
-                    if (data.debug) {
-                        html += `<div class="debug">${JSON.stringify(data.debug, null, 2)}</div>`;
-                    }
-                    result.innerHTML = html;
+                    result.innerHTML = `<p class="error">Error: ${data.error || 'Unknown'}</p>`;
                 }
             } catch (err) {
                 result.innerHTML = `<p class="error">Failed: ${err.message}</p>`;
@@ -83,10 +86,17 @@ HTML_PAGE = '''
 def index():
     return render_template_string(HTML_PAGE)
 
-@app.route("/fetch", methods=["POST"])
+@app.route("/fetch", methods=["POST", "GET", "OPTIONS"])
 def fetch():
-    data = request.get_json()
-    login = data.get("login", "75363350")
+    # Handle preflight OPTIONS request
+    if request.method == "OPTIONS":
+        return make_response("", 200)
+    
+    if request.method == "GET":
+        login = request.args.get("login", "75363350")
+    else:
+        data = request.get_json() or {}
+        login = data.get("login", "75363350")
     
     fp = hashlib.md5(f"{login}{time.time()}{random.random()}".encode()).hexdigest()
     
@@ -123,7 +133,6 @@ def fetch():
         response_wrapper = resp.get("response", {})
         inner_data = response_wrapper.get("data", {}) if isinstance(response_wrapper, dict) else {}
         
-        # Handle image as either dict or string
         image_obj = inner_data.get("image", {})
         if isinstance(image_obj, str):
             img = image_obj
@@ -134,7 +143,7 @@ def fetch():
         
         track = inner_data.get("tracking_pixel", "")
         
-        # Also try direct access as fallback
+        # Fallback: try direct access
         if not img:
             direct_data = resp.get("data", {})
             direct_img = direct_data.get("image", {})
@@ -147,22 +156,15 @@ def fetch():
         if not img:
             return jsonify({
                 "success": False,
-                "error": "No image found in response",
-                "debug": {
-                    "resp_keys": list(resp.keys()),
-                    "has_response": "response" in resp,
-                    "response_type": type(response_wrapper).__name__,
-                    "data_keys": list(inner_data.keys()) if inner_data else [],
-                    "image_type": type(image_obj).__name__,
-                    "image_value": str(image_obj)[:200] if image_obj else "None"
-                }
+                "error": "No image found in response"
             })
         
-        return jsonify({
+        response = make_response(jsonify({
             "success": True,
             "image": img,
             "tracking": track
-        })
+        }))
+        return response
         
     except Exception as e:
         import traceback
